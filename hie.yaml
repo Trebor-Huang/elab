@@ -1,0 +1,13 @@
+cradle:
+  stack:
+    - path: "./src"
+      component: "elab:TT"
+
+    - path: "./app/Main.hs"
+      component: "elab:exe:elab-exe"
+
+    - path: "./app/Paths_elab.hs"
+      component: "elab:exe:elab-exe"
+
+    - path: "./test"
+      component: "elab:test:elab-test"
