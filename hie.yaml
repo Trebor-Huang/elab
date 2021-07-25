@@ -1,7 +1,7 @@
 cradle:
   stack:
     - path: "./src"
-      component: "elab:TT"
+      component: "elab:lib"
 
     - path: "./app/Main.hs"
       component: "elab:exe:elab-exe"

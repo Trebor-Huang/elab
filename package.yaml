@@ -20,6 +20,8 @@ description:         A simple elaborator for dependent type.
 
 dependencies:
 - base >= 4.7 && < 5
+- mtl >= 2.0
+- containers >= 0.6
 
 library:
   source-dirs: src
