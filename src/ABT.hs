@@ -1,11 +1,13 @@
 module ABT where
+import Data.Set ( empty, singleton, unions, Set )
 
 type VarName = String
 
-data ABT a = Node a | FVar VarName | BVar Int | Bind (ABT a) deriving (Eq, Show)
+data ABT a = Node a | FVar VarName | BVar Int | Bind (ABT a) deriving (Eq, Show, Ord)
 type Scope = ABT
 
 class (ABTCompatible a) where
+  collect :: (Ord b) => (ABT a -> b) -> a -> Set b
   fallthrough :: (ABT a -> ABT a) -> a -> a
 
 everywhere :: (ABTCompatible a) =>
@@ -42,3 +44,18 @@ instantiate t = replace 0 t
     check k b
       | k == b = t
       | otherwise = BVar b
+
+substitute :: (ABTCompatible a) => ABT a -> VarName -> ABT a -> ABT a
+substitute m x n = instantiate m $ abstract x n
+
+freeVariables :: (ABTCompatible a) => ABT a -> Set VarName
+freeVariables (Node a) = unions (collect freeVariables a)
+freeVariables (Bind a) = freeVariables a
+freeVariables (FVar x) = singleton x
+freeVariables (BVar i) = empty
+
+variables :: [VarName]
+variables = ('`' : last variables) : ["x"]
+
+fresh :: (ABTCompatible a) => [ABT a] -> VarName
+fresh l = head $ filter (`elem` unions (map freeVariables l)) variables
