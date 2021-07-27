@@ -1,10 +1,14 @@
 import ABT
 import Data.List (intercalate)
+import Data.Set ( fromList, singleton )
 
 data NodeType = Lam (ABT NodeType) | App (ABT NodeType) (ABT NodeType) deriving (Eq, Show)
 instance (ABTCompatible NodeType) where
   fallthrough f (Lam n) = Lam (f n)
   fallthrough f (App m n) = App (f m) (f n)
+
+  collect f (Lam n) = singleton $ f n
+  collect f (App m n) = fromList [f m, f n]
 
 test :: (Eq a, Show a) => a -> a -> String
 test m n | m == n = "Passed."

@@ -1,7 +1,7 @@
 module TT where
 import ABT
-import Control.Monad.State ( gets, MonadState(get, put), StateT )
-import Control.Monad.Except ( MonadError(throwError), Except )
+import Control.Monad.State ( StateT, gets, MonadState(get, put), runStateT )
+import Control.Monad.Except ( MonadError(throwError), ExceptT, runExceptT )
 import Data.Set (Set, union, unions, singleton, empty, toList, fromList)
 import Data.List (zip4)
 type ConstName = String
@@ -87,7 +87,7 @@ data SignatureSnippet =
     | DeclareEq ConstName Type Term
     | DeclareConstraint ConstName Type Term [Constraint] -- New
     deriving (Eq, Show)
-type Signature = [SignatureSnippet]
+type Signature = [SignatureSnippet]  -- ! Snoc list
 signatureDistinct :: Signature -> Bool
 signatureDistinct = hasDuplicate . map getName
 
@@ -113,7 +113,7 @@ data Constraint =
 
 data UserExpr' =
       ULam UserExpr
-    | UApp UserExpr UserExpr -- ! No beta allowed
+    | UApp UserExpr UserExpr -- ! No beta allowed, prevent at parsing
     | UConst ConstName
     | USet
     | UFun UserExpr UserExpr
@@ -152,13 +152,22 @@ data TypeCheckingFailures =
     | ConstNotFound ConstName
     | VariableNotFound VarName
     | ConstAlreadyAssigned ConstName
-    | ScopeCheckFailed ConstName
+    | ScopeCheckFailed ConstName Term
     | TypeInferenceFailed
     | CannotConvertToFunction
     | WHNFNotConvertible
     deriving (Show)
 
-type Elab a = StateT Signature (Except TypeCheckingFailures) a
+type Elab a = ExceptT TypeCheckingFailures (StateT Signature IO) a
+-- The main monad where we work.
+-- The IO inside is for logging. So when the debug is finished it shouldn't be there.
+-- Just replace it with Identity
+
+runElab :: Elab a -- ^ The elaboration process
+  -> Signature -- ^ The initial signature to work with
+  -> IO (Either TypeCheckingFailures a, Signature)
+runElab e = runStateT (runExceptT e)
+
 addMeta :: ConstName -> Type -> Elab ()
 addMeta c t = do
     s <- get
@@ -190,10 +199,10 @@ inScope c t = do
     s <- get
     case break ((c ==) . getName) s of
         (p, DeclareType _ t' : q) ->
-            if all (`elem` map getName p) (toList $ allConstants t) then
+            if all (`elem` map getName q) (toList $ allConstants t) then
                 return ()
             else
-                throwError $ ScopeCheckFailed c
+                throwError $ ScopeCheckFailed c t
         (p, _ : q) -> throwError $ ConstAlreadyAssigned c
         (p, _) -> throwError $ ConstNotFound c
 
