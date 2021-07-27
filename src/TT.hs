@@ -3,6 +3,7 @@ import ABT
 import Control.Monad.State ( gets, MonadState(get, put), StateT )
 import Control.Monad.Except ( MonadError(throwError), Except )
 import Data.Set (Set, union, unions, singleton, empty, toList, fromList)
+import Data.List (zip4)
 type ConstName = String
 -- If terms and types are mutually recursively defined, the ABTCompatible class needs
 -- to use the forall extension. For simplicity, we define a big type containing both.
@@ -85,6 +86,7 @@ data SignatureSnippet =
       DeclareType ConstName Type
     | DeclareEq ConstName Type Term
     | DeclareConstraint ConstName Type Term [Constraint] -- New
+    deriving (Eq, Show)
 type Signature = [SignatureSnippet]
 signatureDistinct :: Signature -> Bool
 signatureDistinct = hasDuplicate . map getName
@@ -103,18 +105,11 @@ constants = "c" : map ('`' :) constants
 freshConstant :: Signature -> ConstName
 freshConstant s = head $ filter (`notElem` map getName s) constants
 
-data Judgement =
-      Sig Signature
-    | Ctx Signature Context
-    | Typ Signature Context Type
-    | Trm Signature Context Type Term
-    | EqTyp Signature Context Type Type
-    | EqTrm Signature Context Type Term Term
-
 data Constraint =
       CTyp Context Type Type
     | CTrm Context Type Term Term
-    | CTms Context [(Term, Term, Type)]
+    | CTms Context [(VarName, Term, Term, Type)]
+    deriving (Eq, Show)
 
 data UserExpr' =
       ULam UserExpr
@@ -136,13 +131,21 @@ instance (ABTCompatible UserExpr') where
     collect f (UFun x y) = fromList [f x, f y]
     collect f _ = empty
 
-data WHNF = VariableHead {
+data WHNF = VariableHead {  -- arguments in natural order
     variableHead :: VarName,
     arguments :: [Term]
 } | ConstHead {
     constHead :: ConstName,
     arguments :: [Term]
 }
+
+forgetWHNF :: WHNF -> Term
+forgetWHNF w = case w of
+    (VariableHead v xs) -> helper (FVar v) xs
+    (ConstHead c xs) -> helper (Node $ Const c) xs
+    where
+        helper tm [] = tm
+        helper tm (x:xs) = helper (Node (App tm x)) xs
 
 data TypeCheckingFailures =
       NonUniqueConst ConstName
@@ -153,6 +156,7 @@ data TypeCheckingFailures =
     | TypeInferenceFailed
     | CannotConvertToFunction
     | WHNFNotConvertible
+    deriving (Show)
 
 type Elab a = StateT Signature (Except TypeCheckingFailures) a
 addMeta :: ConstName -> Type -> Elab ()
@@ -284,7 +288,7 @@ checkWHNFConversion ctx a' (VariableHead h ss) (VariableHead h' ts)
         case lookup h ctx of
             Just t -> do
                 (delta, a) <- seperateArguments ctx t (length ss)
-                constraints <- checkSeqConversion ctx (zip3 (map snd ctx) ss ts)
+                constraints <- checkSeqConversion ctx $ zip4 (map fst ctx) (map snd ctx) ss ts
                 if a' == substTelescope delta ss a
                     then return constraints
                     else error "Type mismatch"  -- ! code unreachable, will remove
@@ -299,8 +303,44 @@ checkWHNFConversion ctx a' (VariableHead h ss) (VariableHead h' ts)
                     (delta, t) <- seperateArguments ((x,a):ctx) (instantiate (FVar x) b) (n-1)
                     return ((x,a):delta, t)
                 seperateArguments _ _ _ = throwError WHNFNotConvertible
-checkWHNFConversion ctx a (ConstHead c ss) t = _
+checkWHNFConversion ctx a f@(ConstHead c ss) t =
+    -- this is the important part.
+    -- it actually does all the unification work.
+    -- (currently it is very rudimentary)
+    if distinctVariables ss then do
+        s' <- computeNF (forgetWHNF t)
+        if all ((`elem` ss).FVar) (freeVariables s') then do
+            let expr = lamTelescope [(x, undefined) | FVar x <- ss] s'
+            inScope c expr
+            addAssignment c expr
+            return []
+        else
+            return [CTrm ctx a (forgetWHNF f) (forgetWHNF t)]
+    else
+        return [CTrm ctx a (forgetWHNF f) (forgetWHNF t)]
+    where
+        distinctVariables :: [Term] -> Bool
+        distinctVariables [] = True
+        distinctVariables ((FVar x) : xs) = distinctVariables xs && FVar x `notElem` xs
+        distinctVariables _ = False
 checkWHNFConversion ctx a s t = throwError WHNFNotConvertible
+
+computeNF :: Term -> Elab Term
+computeNF (Node (Const c)) = do
+    s <- gets (filter ((==c).getName))
+    case s of
+        DeclareConstraint _ ty tm g : _ | null g -> return tm
+                                        | otherwise -> return $ Node $ Const c
+        DeclareEq _ ty tm : _ -> return tm
+        DeclareType _ ty : _ -> return $ Node $ Const c
+        [] -> throwError $ ConstNotFound c
+computeNF (Node (App (Node (Lam (Bind m))) n)) = computeNF (instantiate n m)
+computeNF (Node (App m n)) = Node <$> (App <$> computeNF m <*> computeNF n)
+computeNF (Node (Lam (Bind m))) = do
+    let x = fresh [m] []
+    Node . Lam . Bind . abstract x <$> computeNF (instantiate (FVar x) m)
+computeNF (FVar x) = return (FVar x)
+computeNF _ = error "Unexpected Syntax!"
 
 computeWHNF :: Term -> Elab WHNF
 computeWHNF (Node (Const c)) = do
@@ -319,8 +359,19 @@ computeWHNF (Node (Lam _)) = error "Lambdas should have been stripped already"
 computeWHNF (FVar x) = return $ VariableHead x []
 computeWHNF _ = error "Unexpected Syntax!"
 
-checkSeqConversion :: Context -> [(Type, Term, Term)] -> Elab [Constraint]
-checkSeqConversion = _
+checkSeqConversion :: Context -> [(VarName, Type, Term, Term)] -> Elab [Constraint]
+checkSeqConversion ctx [] = return []
+checkSeqConversion ctx [(x, ty, t1, t2)] = checkTermConversion ctx ty t1 t2
+checkSeqConversion ctx eqs'@((x, ty, t1, t2):eqs) = do
+    c0 <- checkTermConversion ctx ty t1 t2
+    if null c0 then
+        checkSeqConversion ctx [(x', substitute t1 x ty', t1', t2') | (x', ty', t1', t2') <- eqs]
+    else if any ((x `elem`). freeVariables . snd4) eqs then
+        return [CTms ctx eqs']
+    else do
+        c1 <- checkSeqConversion ctx eqs
+        return (c0 ++ c1)
+        where snd4 (a,b,c,d) = b
 
 stripGuardedConstant :: Signature -> Signature
 stripGuardedConstant = map strip
