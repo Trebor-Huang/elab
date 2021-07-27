@@ -61,6 +61,7 @@ variables = "x" : map ('`' : ) variables
 -- the first argument lets you supply a list of terms
 -- so that you are saved the trouble of extracting free variables out of them
 -- the second argument is for (map fst ctx), extracting variables from contexts
+-- todo actually I realized that the first argument is just useless
 fresh :: (ABTCompatible a) => [ABT a] -> [VarName] -> VarName
 fresh l l' = head $ filter (`notElem` (unions (map freeVariables l) `union` fromList l')) variables
 
