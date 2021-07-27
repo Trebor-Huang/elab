@@ -1,5 +1,5 @@
 module ABT where
-import Data.Set ( empty, singleton, unions, Set )
+import Data.Set ( empty, singleton, unions, union, fromList, Set )
 
 type VarName = String
 
@@ -55,7 +55,15 @@ freeVariables (FVar x) = singleton x
 freeVariables (BVar i) = empty
 
 variables :: [VarName]
-variables = ('`' : last variables) : ["x"]
+variables = "x" : map ('`' : ) variables
 
-fresh :: (ABTCompatible a) => [ABT a] -> VarName
-fresh l = head $ filter (`elem` unions (map freeVariables l)) variables
+-- generate fresh names
+-- the first argument lets you supply a list of terms
+-- so that you are saved the trouble of extracting free variables out of them
+-- the second argument is for (map fst ctx), extracting variables from contexts
+fresh :: (ABTCompatible a) => [ABT a] -> [VarName] -> VarName
+fresh l l' = head $ filter (`notElem` (unions (map freeVariables l) `union` fromList l')) variables
+
+-- if that doesn't do, use this one, which is more flexible
+fresh' :: (Foldable t) => t VarName -> VarName
+fresh' s = head $ filter (`notElem` s) variables
