@@ -2,6 +2,7 @@ module TT where
 import ABT
 import Control.Monad.State ( StateT, gets, MonadState(get, put), runStateT )
 import Control.Monad.Except ( MonadError(throwError), ExceptT, runExceptT )
+import Control.Monad.Identity ( Identity, runIdentity )
 import Data.Set (Set, union, unions, singleton, empty, toList, fromList)
 import Data.List (zip4)
 type ConstName = String
@@ -158,15 +159,15 @@ data TypeCheckingFailures =
     | WHNFNotConvertible
     deriving (Show)
 
-type Elab a = ExceptT TypeCheckingFailures (StateT Signature IO) a
+type Elab a = ExceptT TypeCheckingFailures (StateT Signature Identity) a
 -- The main monad where we work.
 -- The IO inside is for logging. So when the debug is finished it shouldn't be there.
 -- Just replace it with Identity
 
 runElab :: Elab a -- ^ The elaboration process
   -> Signature -- ^ The initial signature to work with
-  -> IO (Either TypeCheckingFailures a, Signature)
-runElab e = runStateT (runExceptT e)
+  -> (Either TypeCheckingFailures a, Signature)
+runElab e s = runIdentity $ runStateT (runExceptT e) s
 
 addMeta :: ConstName -> Type -> Elab ()
 addMeta c t = do
