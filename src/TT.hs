@@ -1,7 +1,7 @@
 module TT where
 import ABT
 import Control.Monad.State ( StateT, gets, MonadState(get, put), runStateT )
-import Control.Monad.Except ( MonadError(throwError), ExceptT, runExceptT )
+import Control.Monad.Except ( MonadError(throwError, catchError), ExceptT, runExceptT )
 import Control.Monad.Identity ( Identity, runIdentity )
 import Data.Set (Set, union, unions, singleton, empty, toList, fromList)
 import Data.List (zip4)
@@ -138,7 +138,7 @@ data WHNF = VariableHead {  -- arguments in natural order
 } | ConstHead {
     constHead :: ConstName,
     arguments :: [Term]
-}
+} deriving (Show, Eq)
 
 forgetWHNF :: WHNF -> Term
 forgetWHNF w = case w of
@@ -157,7 +157,7 @@ data TypeCheckingFailures =
     | TypeInferenceFailed
     | CannotConvertToFunction
     | WHNFNotConvertible
-    deriving (Show)
+    deriving (Show, Eq)
 
 type Elab a = ExceptT TypeCheckingFailures (StateT Signature Identity) a
 -- The main monad where we work.
@@ -184,7 +184,7 @@ addAssignment c t = do
     if null q then
         throwError $ ConstNotFound c
     else case head q of
-        DeclareType c' t' -> put (p ++ DeclareEq c t' t : q)
+        DeclareType c' t' -> put (p ++ DeclareEq c t' t : tail q)
         _ -> throwError $ ConstAlreadyAssigned c
 
 addConst :: ConstName -> Type -> Term -> [Constraint] -> Elab ()
@@ -217,23 +217,27 @@ lookUpConstant c = do
 
 checkType :: Context -> UserExpr -> Elab Type
 checkType ctx (Node USet) = return (Node Set)
-checkType ctx (Node (UFun e1 (Bind e2))) = do
+checkType ctx e@(Node (UFun e1 (Bind e2))) = do
     t1 <- checkType ctx e1
     let x = fresh [e1, e2] (map fst ctx)
     t2 <- checkType ((x, t1) : ctx) (instantiate (FVar x) e2)
     return $ Node (t1 :-> Bind (abstract x t2))
+    `catchError` const (checkTerm ctx e (Node Set))
 checkType ctx e = checkTerm ctx e (Node Set)
 
 checkTerm :: Context -> UserExpr -> Type -> Elab Term
-checkTerm ctx (Node (ULam (Bind e))) (Node (a :-> (Bind b))) = do
+checkTerm ctx e0@(Node (ULam (Bind e))) t0@(Node (a :-> (Bind b))) = do
     let x = fresh' (unions [freeVariables e, freeVariables a, freeVariables b])
     Node . Lam . Bind . abstract x <$>
       checkTerm ((x, a) : ctx) (instantiate (FVar x) e) (instantiate (FVar x) b)
+    `catchError` const (_checkTermFallBack ctx e0 t0)
 checkTerm ctx (Node Unknown) t = do
     c <- gets freshConstant
     addMeta c (funcContext ctx t)
     return (appContext (Node (Const c)) ctx)
-checkTerm ctx e t = do
+checkTerm ctx e t = _checkTermFallBack ctx e t
+
+_checkTermFallBack ctx e t = do
     (t', s) <- inferType ctx e
     constraints <- checkTypeConversion ctx t t'
     if null constraints then
@@ -263,7 +267,7 @@ inferType ctx _ = throwError TypeInferenceFailed
 checkTypeConversion :: Context -> Type -> Type -> Elab [Constraint]
 checkTypeConversion ctx (Node Set) (Node Set) = return []
 checkTypeConversion ctx (Node (a1 :-> (Bind b1))) (Node (a2 :-> (Bind b2)))
-    = do
+    = do  -- TODO in the future needs backtracking
         constraints <- checkTypeConversion ctx a1 a2
         let x = fresh [a1, a2, b1, b2] (map fst ctx)
         if null constraints then do
@@ -294,6 +298,7 @@ checkTermConversion ctx a s t = do
 
 checkWHNFConversion :: Context -> Type -> WHNF -> WHNF -> Elab [Constraint]
 checkWHNFConversion ctx a' (VariableHead h ss) (VariableHead h' ts)
+    | h == h' && ss == ts = return []
     | h == h' && length ss == length ts = do
         case lookup h ctx of
             Just t -> do
@@ -313,10 +318,11 @@ checkWHNFConversion ctx a' (VariableHead h ss) (VariableHead h' ts)
                     (delta, t) <- seperateArguments ((x,a):ctx) (instantiate (FVar x) b) (n-1)
                     return ((x,a):delta, t)
                 seperateArguments _ _ _ = throwError WHNFNotConvertible
-checkWHNFConversion ctx a f@(ConstHead c ss) t =
+checkWHNFConversion ctx a f@(ConstHead c ss) t | f == t = return []
     -- this is the important part.
     -- it actually does all the unification work.
     -- (currently it is very rudimentary)
+                                               | otherwise =
     if distinctVariables ss then do
         s' <- computeNF (forgetWHNF t)
         if all ((`elem` ss).FVar) (freeVariables s') then do
@@ -324,10 +330,12 @@ checkWHNFConversion ctx a f@(ConstHead c ss) t =
             inScope c expr
             addAssignment c expr
             return []
+            `catchError` const 
+                (return [CTrm ctx a (forgetWHNF f) (forgetWHNF t)])
         else
             return [CTrm ctx a (forgetWHNF f) (forgetWHNF t)]
     else
-        return [CTrm ctx a (forgetWHNF f) (forgetWHNF t)]
+        return [CTrm ctx a (forgetWHNF f) (forgetWHNF t)]  -- Aww, look at these three.. Got to be better ways
     where
         distinctVariables :: [Term] -> Bool
         distinctVariables [] = True

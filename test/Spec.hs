@@ -34,18 +34,72 @@ sig1 = reverse [
 elab1 :: Elab Term
 elab1 = checkTerm [] (Node (UApp (Node (UApp (Node (UConst "id")) (Node Unknown))) (Node (UConst "0")))) (Node (Const "alpha"))
 
-test3 = show $ runElab elab1 sig1
+res1 = (Right (Node (App (Node (App (Node (Const "id")) (Node (Const "c")))) (Node (Const "0")))),
+  [
+    DeclareEq "c" (Node Set) (Node (Const "Nat")),
+    DeclareEq "alpha" (Node Set) (Node (Const "Nat"))
+  ] ++ tail sig1) -- alpha is assigned
+
+test3 = test (runElab elab1 sig1) res1
 
 sig2 = reverse [
     DeclareType "Nat" (Node Set),
     DeclareType "0" (Node (Const "Nat")),
     DeclareType "suc" (Node (Node (Const "Nat") :-> Bind (Node (Const "Nat")))),
-    DeclareType "caseNat" _ -- Too long I can't write it by hand
+    DeclareType "caseNat" (
+          ({-P-} Node (Const "Nat") ->: Node Set)
+      ->: Node (App (BVar 0 {-P-}) (Node (Const "0")))
+      ->: (Node (Const "Nat") {-n'-} ->: Node (App (BVar 2 {-P-}) (Node (App (Node (Const "suc")) (BVar 0 {-n'-})))))
+      ->: {-n-} Node (Const "Nat")
+      ->: Node (App (BVar 3 {-P-}) (BVar 0 {-n-}))
+      )
     ]
+    where 
+      infixr ->:
+      (->:) x y = Node (x :-> Bind y)
 
-test4 = _
+elab2 = checkTerm [] (Node (UApp 
+  (Node (UApp
+    (Node (UApp
+      (Node (UConst "caseNat"))
+      (Node Unknown)))
+    (Node (UConst "0"))))
+  (Node (ULam (Bind (BVar 0))))))
+  (Node (Node (Const "Nat") :-> Bind (Node (Const "Nat"))))
 
-test5 = _ -- This should fail
+res2 = (
+  Right (Node (Const "```c")),
+  [
+    DeclareConstraint
+      "```c"
+      (Node ((:->) (Node (Const "Nat")) (Bind (Node (Const "Nat")))))
+      (Node (App (Node (App (Node (App (Node (Const "caseNat")) (Node (Const "c")))) (Node (Const "`c")))) (Node (Lam (Bind (Node (App (Node (Const "``c")) (BVar 0))))))))
+      [
+        CTrm
+          [("x", Node (Const "Nat"))]
+          (Node Set)
+          (Node (Const "Nat"))
+          (Node (App (Node (Const "c")) (FVar "x")))
+      ],
+    DeclareConstraint
+      "``c"
+      (Node ((:->) (Node (Const "Nat")) (Bind (Node (App (Node (Const "c")) (Node (App (Node (Const "suc")) (BVar 0))))))))
+      (Node (Lam (BVar 0)))
+      [CTrm [("x", Node (Const "Nat"))] (Node Set) (Node (App (Node (Const "c")) (Node (App (Node (Const "suc")) (FVar "x"))))) (Node (Const "Nat"))],
+    DeclareConstraint
+      "`c"
+      (Node (App (Node (Const "c"))
+      (Node (Const "0"))))
+      (Node (Const "0"))
+      [CTrm [] (Node Set) (Node (App (Node (Const "c")) (Node (Const "0")))) (Node (Const "Nat"))],
+    DeclareType
+      "c"
+      (Node ((:->) (Node (Const "Nat")) (Bind (Node Set))))
+    ] ++ sig2)
+
+test4 = test (runElab elab2 sig2) res2
+
+test5 = "No" -- This should fail
 
 {-
 The following is an example mentioned by ice1000
