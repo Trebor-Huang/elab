@@ -119,6 +119,7 @@ data UserExpr' =
     | USet
     | UFun UserExpr UserExpr
     | Unknown
+    deriving (Eq, Show)
 type UserExpr = ABT UserExpr'
 
 instance (ABTCompatible UserExpr') where
@@ -154,7 +155,7 @@ data TypeCheckingFailures =
     | VariableNotFound VarName
     | ConstAlreadyAssigned ConstName
     | ScopeCheckFailed ConstName Term
-    | TypeInferenceFailed
+    | TypeInferenceFailed UserExpr
     | CannotConvertToFunction
     | WHNFNotConvertible
     deriving (Show, Eq)
@@ -222,7 +223,8 @@ checkType ctx e@(Node (UFun e1 (Bind e2))) = do
     let x = fresh [e1, e2] (map fst ctx)
     t2 <- checkType ((x, t1) : ctx) (instantiate (FVar x) e2)
     return $ Node (t1 :-> Bind (abstract x t2))
-    `catchError` const (checkTerm ctx e (Node Set))
+    `catchError` \x -> checkTerm ctx e (Node Set) `catchError` const (throwError x)
+    -- rethrow error if backtracking failed to get more readable
 checkType ctx e = checkTerm ctx e (Node Set)
 
 checkTerm :: Context -> UserExpr -> Type -> Elab Term
@@ -262,7 +264,7 @@ inferType ctx (Node (UApp m n)) = do
             t <- checkTerm ctx n t1
             return (instantiate t t2, Node (App s t))
         (_, s) -> throwError CannotConvertToFunction
-inferType ctx _ = throwError TypeInferenceFailed
+inferType ctx s = throwError $ TypeInferenceFailed s
 
 checkTypeConversion :: Context -> Type -> Type -> Elab [Constraint]
 checkTypeConversion ctx (Node Set) (Node Set) = return []

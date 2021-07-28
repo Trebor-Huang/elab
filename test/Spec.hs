@@ -54,11 +54,11 @@ sig2 = reverse [
       ->: Node (App (BVar 3 {-P-}) (BVar 0 {-n-}))
       )
     ]
-    where 
+    where
       infixr ->:
       (->:) x y = Node (x :-> Bind y)
 
-elab2 = checkTerm [] (Node (UApp 
+elab2 = checkTerm [] (Node (UApp
   (Node (UApp
     (Node (UApp
       (Node (UConst "caseNat"))
@@ -99,7 +99,40 @@ res2 = (
 
 test4 = test (runElab elab2 sig2) res2
 
-test5 = "No" -- This should fail
+sig3 = reverse [
+    DeclareType "Nat" (Node Set),
+    DeclareType "0" (Node (Const "Nat")),
+    DeclareEq "coerce" -- \F x -> x  ::  (F : Nat -> Set) -> F 0 -> F 0
+      (Node
+        (Node (Node (Const "Nat") :-> Bind (Node Set))
+          :-> Node (Node (App (BVar 0) (Node (Const "0")))
+          :-> Node (App (BVar 1) (Node (Const "0"))))))
+      (Node (Lam (Bind (Node (Lam (Bind (BVar 0)))))))
+  ]
+
+elab3 = checkTerm []
+  (Node (ULam
+    (Node (UApp
+      (BVar 0)
+      (Node (UApp
+        (Node (UApp
+          (Node $ UConst "coerce")
+          (Node Unknown)))
+        (BVar 0)))))))
+  (Node (
+    Node (Node (Const "Nat") :-> Bind (Node (Const "Nat")))
+    :-> Bind (Node (Const "Nat"))))
+
+test5 = test (runElab elab3 sig3)
+  (Left (TypeInferenceFailed
+    (Node (ULam
+      (Node (UApp
+        (BVar 0)
+        (Node (UApp
+          (Node (UApp
+            (Node (UConst "coerce"))
+            (Node Unknown)))
+          (BVar 0)))))))), sig3)
 
 {-
 The following is an example mentioned by ice1000
@@ -110,7 +143,7 @@ test a B b = refl
 Where
 
 _≡_ : {A : Set} -> A -> A -> Set
-refl : {A : Set}(a : A) -> a ≡ a
+refl : {A : Set}{a : A} -> a ≡ a
 
 This will be done after we have implicit binders
 
