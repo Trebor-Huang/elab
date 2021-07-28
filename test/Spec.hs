@@ -2,6 +2,7 @@ import ABT
 import TT
 import Data.List (intercalate)
 import Data.Set ( fromList, singleton )
+import Data.Either ( isRight )
 
 data NodeType = LamTest (ABT NodeType) | AppTest (ABT NodeType) (ABT NodeType) deriving (Eq, Show)
 instance (ABTCompatible NodeType) where
@@ -28,6 +29,16 @@ infixr ->:
 (->:) x y = Node (Fun x (Bind y) True)
 infixr ->?
 (->?) x y = Node (Fun x (Bind y) False)
+infixl @: , @! , @?
+(@:) m n = Node (App m n)
+(@!) m n = Node (UApp m n True)
+(@?) m n = Node (UApp m n False)
+lam = Node . Lam . Bind
+lamU m = Node (ULam (Bind m) True)
+lamI m = Node (ULam (Bind m) False)
+
+-- TODO rewrite the previous testcases with the shorthands above
+-- TODO we can be even more friendly if we use free variables inside and abstract them
 
 sig1 = reverse [
     DeclareType "Nat" (Node Set),
@@ -112,6 +123,8 @@ test5 = test (runElab elab3 sig3)
             (Node Unknown) True))
           (BVar 0) True)) True)) True))), sig3)
 
+-- Next up, some fiddling with flips
+
 typeFlip = Node Set ->? (BVar 0 ->: BVar 1 ->: BVar 2) ->: BVar 1 ->: BVar 2 ->: BVar 3
 
 elaboratedFlip = Node (Lam (Bind
@@ -124,6 +137,7 @@ elaboratedFlip = Node (Lam (Bind
             (BVar 0)))
           (BVar 1))))))))))))))
 
+-- The usual explicit flip
 termFlip = Node (ULam (Bind -- A
   (Node (ULam (Bind -- F
     (Node (ULam (Bind -- a
@@ -133,11 +147,12 @@ termFlip = Node (ULam (Bind -- A
             (BVar 2)
             (BVar 0) True))
           (BVar 1) True)))
-          True)))
-          True)))
-          True)))
-          False)
+        True)))
+      True)))
+    True)))
+  False)
 
+-- flip with the type parameter implicit
 termFlip' = Node (ULam (Bind -- F
     (Node (ULam (Bind -- a
       (Node (ULam (Bind -- b
@@ -146,10 +161,11 @@ termFlip' = Node (ULam (Bind -- F
             (BVar 2)
             (BVar 0) True))
           (BVar 1) True)))
-          True)))
-          True)))
-          True) -- \A is implicit
+        True)))
+      True)))
+    True) -- \A is implicit
 
+-- flip, using the previous term, testing implicit argument synthesis
 termFlip'' = Node (ULam (Bind -- F
     (Node (ULam (Bind -- a
       (Node (ULam (Bind -- b
@@ -160,11 +176,32 @@ termFlip'' = Node (ULam (Bind -- F
               (BVar 2) True))
             (BVar 1) True))
           (BVar 0) True)))
-          True)))
-          True)))
-          True)
+        True)))
+      True)))
+    True)
 
-elaboratedFlip'' = Node (Lam (Bind (Node (Lam (Bind (Node (Lam (Bind (Node (Lam (Bind (Node (App (Node (App (Node (App (Node (App (Node (Const "flip")) (Node (App (Node (App (Node (App (Node (App (Node (Const "c")) (BVar 3))) (BVar 2))) (BVar 1))) (BVar 0))))) (BVar 2))) (BVar 1))) (BVar 0))))))))))))))
+elaboratedFlip'' =
+  Node (Lam (Bind
+    (Node (Lam (Bind
+      (Node (Lam (Bind
+        (Node (Lam (Bind
+          (Node (App
+            (Node (App
+              (Node (App
+                (Node (App
+                  (Node (Const "flip"))
+                  (Node (App
+                    (Node (App
+                      (Node (App
+                        (Node (App
+                          (Node (Const "c"))
+                          (BVar 3)))
+                        (BVar 2)))
+                      (BVar 1)))
+                    (BVar 0)))))
+                  (BVar 2)))
+                (BVar 1)))
+              (BVar 0))))))))))))))
 
 elab4 = checkTerm [] termFlip typeFlip
 elab5 = checkTerm [] termFlip' typeFlip
@@ -189,8 +226,37 @@ test8 = test (runElab elab6 [DeclareEq "flip" typeFlip elaboratedFlip]) (Right e
               (BVar 3))))))))))))), -- \ A f b c -> A
     DeclareEq "flip" typeFlip elaboratedFlip])
 
+-- Now let's play with a more general flip.
+
+typeFlipGeneral = Node Set  -- (A : Set)
+  ->? Node Set  -- (B : Set)
+  ->? Node Set  -- (C : Set)
+  ->? (BVar 2 ->: BVar 2 ->: BVar 2)  -- (A -> B -> C), and wow look at those (BVar 2)'s
+  ->: BVar 2  -- B
+  ->: BVar 4  -- A
+  ->: BVar 3  -- C
+
+termFlipGeneral = lamU {-f-} $ lamU {-a-} $ lamU {-b-}
+  (BVar 2 @! BVar 0 @! BVar 1) -- f b a
+
+termFlipGeneral' = lamU $ lamU $ lamU 
+  (Node (UConst "flip") @! BVar 2 @! BVar 1 @! BVar 0)
+
+elaboratedFlipGeneral = lam $ lam $ lam $ lam $ lam $ lam
+  (BVar 2 @: BVar 0 @: BVar 1)
+
+elab7 = checkTerm [] termFlipGeneral typeFlipGeneral
+
+elab8 :: Elab Term
+elab8 = checkTerm [] termFlipGeneral' typeFlipGeneral
+
+test9 = test (runElab elab7 []) (Right elaboratedFlipGeneral, [])
+
+-- This is simply to long. I can't write it.
+test10 = test (isRight $ fst $ runElab elab8 [DeclareEq "flip" typeFlipGeneral elaboratedFlipGeneral]) True
+
 tests :: [String]
-tests = [test1, test2, test3, test4, test5, test6, test7, test8]
+tests = [test1, test2, test3, test4, test5, test6, test7, test8, test9, test10]
 
 main :: IO ()
 main = putStrLn (intercalate "\n" tests)

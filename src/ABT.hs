@@ -62,8 +62,9 @@ variables = "x" : map ('`' : ) variables
 -- so that you are saved the trouble of extracting free variables out of them
 -- the second argument is for (map fst ctx), extracting variables from contexts
 -- todo actually I realized that the first argument is just useless
-fresh :: (ABTCompatible a) => [ABT a] -> [VarName] -> VarName
-fresh l l' = head $ filter (`notElem` (unions (map freeVariables l) `union` fromList l')) variables
+-- todo we might use the state monad to get a gensym stuff instead
+fresh :: [VarName] -> VarName
+fresh l  = head $ filter (`notElem` fromList l) variables
 
 -- if that doesn't do, use this one, which is more flexible
 fresh' :: (Foldable t) => t VarName -> VarName

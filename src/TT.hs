@@ -1,10 +1,11 @@
 module TT where
 import ABT
 import Control.Monad.State ( StateT, gets, MonadState(get, put), runStateT )
-import Control.Monad.Except ( MonadError(throwError, catchError), ExceptT, runExceptT )
+import Control.Monad.Except ( MonadError(throwError, catchError), ExceptT, runExceptT, liftIO )
 import Control.Monad.Identity ( Identity, runIdentity )
 import Data.Set (Set, union, unions, singleton, empty, toList, fromList)
 import Data.List (zip4)
+-- import System.IO.Unsafe ( unsafePerformIO )
 type ConstName = String
 -- If terms and types are mutually recursively defined, the ABTCompatible class needs
 -- to use the forall extension. For simplicity, we define a big type containing both.
@@ -228,7 +229,7 @@ checkType :: Context -> UserExpr -> Elab Type
 checkType ctx (Node USet) = return (Node Set)
 checkType ctx e@(Node (UFun e1 (Bind e2) b)) = (do
     t1 <- checkType ctx e1
-    let x = fresh [e1, e2] (map fst ctx)
+    let x = fresh (map fst ctx)
     t2 <- checkType ((x, t1) : ctx) (instantiate (FVar x) e2)
     return $ Node (Fun t1 (Bind (abstract x t2)) b))
     `catchError` \x -> checkTerm ctx e (Node Set) `catchError` const (throwError x)
@@ -238,7 +239,7 @@ checkType ctx e = checkTerm ctx e (Node Set)
 checkTerm :: Context -> UserExpr -> Type -> Elab Term
 checkTerm ctx e0@(Node (ULam (Bind e) p1)) t0@(Node (Fun a (Bind b) p2))
   | p1 == p2 = do
-    let x = fresh' (unions [freeVariables e, freeVariables a, freeVariables b])
+    let x = fresh' (unions [freeVariables e, freeVariables a, freeVariables b, fromList (map fst ctx)])
     Node . Lam . Bind . abstract x <$>
       checkTerm ((x, a) : ctx) (instantiate (FVar x) e) (instantiate (FVar x) b)
   | not p2 = checkTerm ctx (Node (ULam (Bind e0) False)) (Node (Fun a (Bind b) False))
@@ -287,15 +288,16 @@ inferType ctx e@(Node (UApp m n b)) = do
 inferType ctx s = throwError $ TypeInferenceFailed s
 
 checkTypeConversion :: Context -> Type -> Type -> Elab [Constraint]
-checkTypeConversion ctx (Node Set) (Node Set) = return []
+checkTypeConversion ctx (Node Set) (Node Set) = return []  -- This will get worse as soon as we allow redexes in types
+checkTypeConversion ctx t1@(Node Set) t2 = throwError $ CannotConvert t1 t2
+checkTypeConversion ctx t1 t2@(Node Set) = throwError $ CannotConvert t1 t2
 checkTypeConversion ctx f1@(Node (Fun a1 (Bind b1) plicity1)) f2@(Node (Fun a2 (Bind b2) plicity2))
     | plicity1 == plicity2 = do  -- TODO in the future needs backtracking
         constraints <- checkTypeConversion ctx a1 a2
-        let x = fresh [a1, a2, b1, b2] (map fst ctx)
+        let x = fresh (map fst ctx)
         if null constraints then do
             checkTypeConversion ((x, a1):ctx) (instantiate (FVar x) b1) (instantiate (FVar x) b2)
         else do
-            -- !?
             p <- gets freshConstant
             addConst p
                 (funcContext ctx $ Node (Fun a1 (Bind a2) True))
@@ -310,15 +312,14 @@ checkTypeConversion ctx t1 t2 = checkTermConversion ctx (Node Set) t1 t2
 
 checkTermConversion :: Context -> Type -> Term -> Term -> Elab [Constraint]
 checkTermConversion ctx (Node (Fun a (Bind b) _)) s t = do  -- plicity does not matter
-    let x = fresh [a,b,s,t] (map fst ctx)
+    let x = fresh (map fst ctx)
     checkTermConversion ((x, a):ctx)
         (instantiate (FVar x) b)
         (Node (App s (FVar x)))
         (Node (App t (FVar x)))
 checkTermConversion ctx a s t = do
-    sig <- get
-    s' <- computeWHNF $ substituteAllConst sig s
-    t' <- computeWHNF $ substituteAllConst sig t
+    s' <- computeWHNF s
+    t' <- computeWHNF t
     checkWHNFConversion ctx a s' t'
 
 checkWHNFConversion :: Context -> Type -> WHNF -> WHNF -> Elab [Constraint]
@@ -339,7 +340,7 @@ checkWHNFConversion ctx a' w1@(VariableHead h ss) w2@(VariableHead h' ts)
                 seperateArguments :: Context -> Type -> Int -> Elab (Telescope, Type)
                 seperateArguments ctx a 0 = return ([], a)
                 seperateArguments ctx (Node (Fun a (Bind b) plicity)) n = do
-                    let x = fresh ([]::[Term]) (map fst ctx)
+                    let x = fresh (map fst ctx)
                     (delta, t) <- seperateArguments ((x,a):ctx) (instantiate (FVar x) b) (n-1)
                     return ((x,a,plicity):delta, t)
                 seperateArguments _ _ _ = throwError $ WHNFNotConvertible w1 w2
@@ -377,13 +378,22 @@ computeNF (Node (Const c)) = do
 computeNF (Node (App (Node (Lam (Bind m))) n)) = computeNF (instantiate n m)
 computeNF (Node (App m n)) = Node <$> (App <$> computeNF m <*> computeNF n)
 computeNF (Node (Lam (Bind m))) = do
-    let x = fresh [m] []
+    let x = fresh' $ freeVariables m
     Node . Lam . Bind . abstract x <$> computeNF (instantiate (FVar x) m)
 computeNF (FVar x) = return (FVar x)
 computeNF t = throwError $ UnexpectedSyntax t
 
 computeWHNF :: Term -> Elab WHNF
-computeWHNF (Node (Const c)) = return (ConstHead c [])
+computeWHNF (Node (Const c)) = do
+    sig <- get
+    case head $ filter ((==c).getName) sig of
+        DeclareEq _ _ t -> computeWHNF t
+        DeclareConstraint _ _ t cns ->
+            if null cns then
+                computeWHNF t
+            else
+                return $ ConstHead c []
+        _ -> return $ ConstHead c []
 computeWHNF (Node (App m n)) = do
     m' <- computeWHNF m
     case m' of
@@ -407,15 +417,3 @@ checkSeqConversion ctx eqs'@((x, ty, t1, t2):eqs) = do
         c1 <- checkSeqConversion ctx eqs
         return (c0 ++ c1)
         where snd4 (a,b,c,d) = b
-
-substituteAllConst :: Signature -> Term -> Term
-substituteAllConst sig (Node (Const c)) =
-    case head $ filter ((==c).getName) sig of
-        DeclareEq _ _ t -> t
-        _ -> Node (Const c)
-substituteAllConst sig (Node Set) = Node Set
-substituteAllConst sig (Node (Fun m n b)) = Node (Fun (substituteAllConst sig m) (substituteAllConst sig n) b)
-substituteAllConst sig (Node (App m n)) = Node (App (substituteAllConst sig m) (substituteAllConst sig n))
-substituteAllConst sig (Node (Lam m)) = Node (Lam (substituteAllConst sig m))
-substituteAllConst sig (Bind m) = Bind (substituteAllConst sig m)
-substituteAllConst sig v = v
