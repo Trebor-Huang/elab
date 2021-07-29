@@ -163,8 +163,20 @@ test9 = test (runElab elab7 []) (Right elaboratedFlipGeneral, [])
 -- This is simply to long. I can't write it.
 test10 = test (isRight $ fst $ runElab elab8 [DeclareEq "flip" typeFlipGeneral elaboratedFlipGeneral]) True
 
+test11 = test
+  (fst $ runElab elab6 [DeclareEq "flip" typeFlipGeneral elaboratedFlipGeneral])
+  (Right
+    (lam $ lam $ lam $ lam $
+      Node (Const "flip")
+        @: (Node (Const "_c1") @: BVar 3 @: BVar 2 @: BVar 1 @: BVar 0)
+        @: (Node (Const "_c2") @: BVar 3 @: BVar 2 @: BVar 1 @: BVar 0)
+        @: (Node (Const "_c3") @: BVar 3 @: BVar 2 @: BVar 1 @: BVar 0)
+        @: BVar 2
+        @: BVar 1
+        @: BVar 0))
+
 tests :: [String]
-tests = [test1, test2, test3, test4, test6, test7, test8, test9, test10]
+tests = [test1, test2, test3, test4, test6, test7, test8, test9, test10, test11]
 
 main :: IO ()
 main = putStrLn (intercalate "\n" tests)

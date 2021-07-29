@@ -177,12 +177,13 @@ data WHNF = VariableHead {  -- arguments in natural order
 } | ConstHead {
     constHead :: ConstName,
     arguments :: [Term]
-} | LamHead {lamHead :: Term} deriving (Show, Eq)
+} | SetHead | LamHead {lamHead :: Term} deriving (Show, Eq)
 
 forgetWHNF :: WHNF -> Term
 forgetWHNF w = case w of
     (VariableHead v xs) -> helper (FVar v) xs
     (ConstHead c xs) -> helper (Node $ Const c) xs
+    SetHead -> Node Set
     (LamHead l) -> Node (Lam (Bind l))
     where
         helper tm [] = tm
@@ -270,6 +271,7 @@ checkType ctx e@(Node (UFun e1 (Bind e2) b)) = (do
 checkType ctx e = checkTerm ctx e (Node Set)
 
 checkTerm :: Context -> UserExpr -> Type -> Elab Term
+checkTerm _ u@(Node USet) t = throwError $ TypeMismatch u t
 checkTerm ctx e0@(Node (ULam (Bind e) p1)) t0@(Node (Fun a (Bind b) p2))
   | p1 == p2 = do
     let x = fresh (map fst ctx)
@@ -307,6 +309,7 @@ inferType ctx (Node (UConst c)) = do
     return (s, Node (Const c))
 inferType ctx e@(Node (UApp m n b)) = do
     x <- inferType ctx m
+    -- we need to ensure x is a function
     case x of
         (Node (Fun t1 (Bind t2) b1), s) -> if b1 == b then do
             t <- checkTerm ctx n t1
@@ -377,6 +380,7 @@ checkWHNFConversion ctx a' w1@(VariableHead h ss) w2@(VariableHead h' ts)
                     (delta, t) <- seperateArguments ((x,a):ctx) (instantiate (FVar x) b) (n-1)
                     return ((x,a,plicity):delta, t)
                 seperateArguments _ _ _ = throwError $ WHNFNotConvertible w1 w2
+-- lambda head
 checkWHNFConversion ctx a f@(ConstHead c ss) t | f == t = return []
                                                | otherwise =
     if distinctVariables ss then do
@@ -427,13 +431,15 @@ computeWHNF (Node (Const c)) = do
             else
                 return $ ConstHead c []
         _ -> return $ ConstHead c []
-computeWHNF (Node (App m n)) = do
+computeWHNF e@(Node (App m n)) = do
     m' <- computeWHNF m
     case m' of
         LamHead l -> computeWHNF $ instantiate n l
+        SetHead -> throwError $ UnexpectedSyntax e
         _ -> return m'{arguments = arguments m' ++ [n]}  -- O(n^2). Might do the reversal at the end?
 computeWHNF (Node (Lam (Bind l))) = return $ LamHead l
 computeWHNF (FVar x) = return $ VariableHead x []
+computeWHNF (Node Set) = return SetHead
 computeWHNF t = throwError $ UnexpectedSyntax t
 
 
