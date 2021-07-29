@@ -3,8 +3,14 @@ import Data.Set ( empty, singleton, unions, union, fromList, Set )
 
 type VarName = String
 
-data ABT a = Node a | FVar VarName | BVar Int | Bind (ABT a) deriving (Eq, Show, Ord)
+data ABT a = Node a | FVar VarName | BVar Int | Bind (ABT a) deriving (Eq, Ord)
 type Scope = ABT
+
+instance  (Show a) => Show (ABT a) where
+  show (Node a) = show a
+  show (FVar v) = "(FVar " ++ show v ++ ")"
+  show (BVar i) = "(BVar " ++ show i ++ ")"
+  show (Bind i) = show i
 
 class (ABTCompatible a) where
   collect :: (Ord b) => (ABT a -> b) -> a -> Set b
@@ -54,18 +60,8 @@ freeVariables (Bind a) = freeVariables a
 freeVariables (FVar x) = singleton x
 freeVariables (BVar i) = empty
 
-variables :: [VarName]
-variables = "x" : map ('`' : ) variables
-
 -- generate fresh names
--- the first argument lets you supply a list of terms
--- so that you are saved the trouble of extracting free variables out of them
--- the second argument is for (map fst ctx), extracting variables from contexts
--- todo actually I realized that the first argument is just useless
--- todo we might use the state monad to get a gensym stuff instead
-fresh :: [VarName] -> VarName
-fresh l  = head $ filter (`notElem` fromList l) variables
-
--- if that doesn't do, use this one, which is more flexible
-fresh' :: (Foldable t) => t VarName -> VarName
-fresh' s = head $ filter (`notElem` s) variables
+-- give a collection of names that you want to avoid
+fresh :: Foldable t => t VarName -> VarName
+fresh l  = head $ filter (`notElem` l) 
+  (map (("_x"++) . show) [1..]) -- a list of variables x1 x2 x3 ...

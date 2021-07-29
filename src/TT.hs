@@ -3,9 +3,23 @@ import ABT
 import Control.Monad.State ( StateT, gets, MonadState(get, put), runStateT )
 import Control.Monad.Except ( MonadError(throwError, catchError), ExceptT, runExceptT, liftIO )
 import Control.Monad.Identity ( Identity, runIdentity )
+import Control.Monad.Writer
 import Data.Set (Set, union, unions, singleton, empty, toList, fromList)
 import Data.List (zip4)
 -- import System.IO.Unsafe ( unsafePerformIO )
+
+infixr ->:
+(->:) x y = Node (Fun x (Bind y) True)
+infixr ->?
+(->?) x y = Node (Fun x (Bind y) False)
+infixl @: , @! , @?
+(@:) m n = Node (App m n)
+(@!) m n = Node (UApp m n True)
+(@?) m n = Node (UApp m n False)
+lam = Node . Lam . Bind
+lamU m = Node (ULam (Bind m) True)
+lamI m = Node (ULam (Bind m) False)
+
 type ConstName = String
 -- If terms and types are mutually recursively defined, the ABTCompatible class needs
 -- to use the forall extension. For simplicity, we define a big type containing both.
@@ -14,7 +28,7 @@ data Term' = Set
     | Const ConstName
     | App Term Term
     | Lam Term
-    deriving (Show, Eq, Ord)
+    deriving (Eq, Ord)
 type Term = ABT Term'
 type Type = Term
 instance (ABTCompatible Term') where
@@ -27,6 +41,14 @@ instance (ABTCompatible Term') where
     collect f (App m n) = fromList [f m, f n]
     collect f (Lam n) = singleton $ f n
     collect _ m = empty
+
+instance (Show Term') where
+    show (Fun a b True) = "(" ++ show a ++ " ->: " ++ show b ++ ")"
+    show (Fun a b False) = "(" ++ show a ++ " ->? " ++ show b ++ ")"
+    show (App a b) = "(" ++ show a ++ " @: " ++ show b ++ ")"
+    show (Lam a) = "(lam " ++ show a ++ ")"
+    show (Const c) = "(Node (Const " ++ show c ++ "))"
+    show Set = "(Node Set)"
 
 allConstants :: Term -> Set ConstName
 allConstants (Node (Fun m n b)) = allConstants m `union` allConstants n
@@ -103,9 +125,9 @@ getType (DeclareType _ t) = t
 getType (DeclareEq _ t _) = t
 getType (DeclareConstraint _ t _ _) = t
 
-constants = "c" : map ('`' :) constants
 freshConstant :: Signature -> ConstName
-freshConstant s = head $ filter (`notElem` map getName s) constants
+freshConstant s = head $ filter (`notElem` map getName s)
+    (map (("_c"++) . show) [1..])  -- a list of constants
 
 data Constraint =
       CTyp Context Type Type
@@ -120,8 +142,19 @@ data UserExpr' =
     | USet
     | UFun UserExpr UserExpr Bool
     | Unknown
-    deriving (Eq, Show)
+    deriving (Eq)
 type UserExpr = ABT UserExpr'
+
+instance Show UserExpr' where
+    show (ULam e True) = "(lamU " ++ show e ++ ")"
+    show (ULam e False) = "(lamI " ++ show e ++ ")"
+    show (UConst c) = "(Node (UConst " ++ show c ++ "))"
+    show USet = "(Node USet)"
+    show (UFun m n True) = "(" ++ show m ++ " ->:! " ++ show n ++ ")"
+    show (UFun m n False) = "(" ++ show m ++ " ->:? " ++ show n ++ ")"
+    show Unknown = "(Node Unknown)"
+    show (UApp m n True) = "(" ++ show m ++ " @! " ++ show n ++ ")"
+    show (UApp m n False) = "(" ++ show m ++ " @? " ++ show n ++ ")"
 
 uappContext :: UserExpr -> Context -> UserExpr
 uappContext e [] = e
@@ -239,7 +272,7 @@ checkType ctx e = checkTerm ctx e (Node Set)
 checkTerm :: Context -> UserExpr -> Type -> Elab Term
 checkTerm ctx e0@(Node (ULam (Bind e) p1)) t0@(Node (Fun a (Bind b) p2))
   | p1 == p2 = do
-    let x = fresh' (unions [freeVariables e, freeVariables a, freeVariables b, fromList (map fst ctx)])
+    let x = fresh (map fst ctx)
     Node . Lam . Bind . abstract x <$>
       checkTerm ((x, a) : ctx) (instantiate (FVar x) e) (instantiate (FVar x) b)
   | not p2 = checkTerm ctx (Node (ULam (Bind e0) False)) (Node (Fun a (Bind b) False))
@@ -378,7 +411,7 @@ computeNF (Node (Const c)) = do
 computeNF (Node (App (Node (Lam (Bind m))) n)) = computeNF (instantiate n m)
 computeNF (Node (App m n)) = Node <$> (App <$> computeNF m <*> computeNF n)
 computeNF (Node (Lam (Bind m))) = do
-    let x = fresh' $ freeVariables m
+    let x = fresh $ freeVariables m
     Node . Lam . Bind . abstract x <$> computeNF (instantiate (FVar x) m)
 computeNF (FVar x) = return (FVar x)
 computeNF t = throwError $ UnexpectedSyntax t
